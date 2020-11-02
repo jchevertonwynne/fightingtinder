@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::DBUser;
 use crate::schema::users;
-use crate::schema::users::dsl::{username, users};
 
 const SECRET: &[u8] = b"some-secret";
 
@@ -58,12 +57,12 @@ pub fn create_paths() -> Scope {
 async fn get_users(conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>) -> impl Responder {
     match conn_pool.get_ref().try_get() {
         Some(conn) => {
-            match users.load::<DBUser>(&conn) {
+            match users::dsl::users.load::<DBUser>(&conn) {
                 Ok(db_users) => {
                     let cleaned_users: Vec<UserDTO> = db_users.iter()
-                        .map(|u| UserDTO::from(u))
+                        .map(|user| UserDTO::from(user))
                         .collect();
-                    let as_string = serde_json::to_string(&cleaned_users).expect("should be able to jsonify");
+                    let as_string = serde_json::to_string(&cleaned_users).expect("unable to jsonify user records");
                     HttpResponse::Ok().body(as_string)
                 }
                 Err(err) => {
@@ -84,7 +83,7 @@ async fn get_user(req: HttpRequest, conn_pool: web::Data<Arc<Pool<ConnectionMana
                 Some(userid) => {
                     match DBUser::find(userid, &conn) {
                         Ok(dbu) => {
-                            let as_string = serde_json::to_string(&UserDTO::from(&dbu)).expect("should be able to jsonify");
+                            let as_string = serde_json::to_string(&UserDTO::from(&dbu)).expect("unable to jsonify UserDTO");
                             HttpResponse::Ok().body(as_string)
                         }
                         Err(err) => HttpResponse::NotFound().body(err.to_string())
@@ -103,13 +102,13 @@ async fn create_user(body: String, conn_pool: web::Data<Arc<Pool<ConnectionManag
         Some(conn) => {
             match serde_json::from_str::<UserDTO>(&body) {
                 Ok(mut user) => {
-                    user.password = bcrypt::hash(user.password, 10).expect("please encrypt");
+                    user.password = bcrypt::hash(user.password, 10).expect("unable to encrypt user password");
                     match diesel::insert_into(users::table).values(&user).get_result::<DBUser>(&conn) {
                         Ok(user_record) => {
                             let safe = UserDTO::from(&user_record);
-                            let user_json = serde_json::to_string(&safe).expect("why would this fail lol");
+                            let user_json = serde_json::to_string(&safe).expect("unable to jsonify UserDTO");
 
-                            let token_str = jsonwebtoken::encode(&Header::default(), &UserJWT::from(&user), &EncodingKey::from_secret(SECRET)).unwrap();
+                            let token_str = jsonwebtoken::encode(&Header::default(), &UserJWT::from(&user), &EncodingKey::from_secret(SECRET)).expect("unable to encode json web token");
 
                             HttpResponse::Ok()
                                 .cookie(Cookie::new("user", token_str))
@@ -123,7 +122,6 @@ async fn create_user(body: String, conn_pool: web::Data<Arc<Pool<ConnectionManag
         }
         None => HttpResponse::InternalServerError().body("could not get db conn instance")
     }
-
 }
 
 #[post("/login")]
@@ -132,15 +130,14 @@ async fn login(body: String, conn_pool: web::Data<Arc<Pool<ConnectionManager<PgC
         Some(conn) => {
             match serde_json::from_str::<UserDTO>(&body) {
                 Ok(user) => {
-                    // match users.filter(id.eq(i)).limit(1).load::<DBUser>(conn) {
-                    match users.filter(username.eq(&user.username)).limit(1).load::<DBUser>(&conn) {
+                    match users::dsl::users.filter(users::dsl::username.eq(&user.username)).limit(1).load::<DBUser>(&conn) {
                         Ok(mut db_users) => {
                             match db_users.pop() {
                                 Some(db_user) => {
                                     match bcrypt::verify(&user.password, &db_user.password) {
                                         Ok(res) => {
                                             if res {
-                                                let token_str = jsonwebtoken::encode(&Header::default(), &UserJWT::from(&user), &EncodingKey::from_secret(SECRET)).unwrap();
+                                                let token_str = jsonwebtoken::encode(&Header::default(), &UserJWT::from(&user), &EncodingKey::from_secret(SECRET)).expect("unable to encode json web token");
 
                                                 HttpResponse::Ok()
                                                     .cookie(Cookie::new("user", token_str))
@@ -170,9 +167,7 @@ async fn check(req: HttpRequest) -> impl Responder {
     match req.cookie("user") {
         Some(cookie) => {
             match jsonwebtoken::decode::<UserJWT>(&cookie.value(), &DecodingKey::from_secret(SECRET), &Validation::default()) {
-                Ok(decoded) => {
-                    HttpResponse::Ok().body(decoded.claims.username)
-                }
+                Ok(decoded) => HttpResponse::Ok().body(decoded.claims.username),
                 Err(err) => HttpResponse::BadRequest().body(err.to_string())
             }
         }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
-        let pool = connection_pool().expect("please make a pool");
+        let pool = connection_pool().expect("unable to create pool of connections");
         let pool = Arc::new(pool);
         App::new()
         .data(pool)
