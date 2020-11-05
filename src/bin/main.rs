@@ -8,10 +8,12 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let pool = connection_pool().expect("unable to create pool of connections");
         let pool = Arc::new(pool);
+
         App::new()
-        .data(pool)
-        .service( paths::users::create_paths())
-    }).bind("127.0.0.1:8080")?
-        .run()
-        .await
+            .data(pool)
+            .service(paths::users::create_paths())
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
