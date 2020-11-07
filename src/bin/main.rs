@@ -12,6 +12,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .data(pool)
             .service(paths::users::create_paths())
+            .service(paths::swipe::create_paths())
     })
     .bind("127.0.0.1:8080")?
     .run()
