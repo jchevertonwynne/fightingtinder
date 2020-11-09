@@ -8,5 +8,7 @@ CREATE TABLE matches (
             REFERENCES users(username),
     CONSTRAINT user2_fk
         FOREIGN KEY(username2)
-            REFERENCES users(username)
+            REFERENCES users(username),
+    CONSTRAINT usernames_in_order
+        CHECK (username1 < username2)
 )
