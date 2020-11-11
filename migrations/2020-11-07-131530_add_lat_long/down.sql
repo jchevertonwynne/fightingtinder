@@ -1,2 +1,3 @@
 ALTER TABLE users
-DROP COLUMN latlong
+DROP COLUMN lat,
+DROP COLUMN long

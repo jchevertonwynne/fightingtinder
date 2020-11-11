@@ -4,7 +4,6 @@ use actix_session::CookieSession;
 use actix_web::{web, App, HttpServer};
 use web::{get, post, scope};
 
-use actix_web::middleware::Logger;
 use fightingtinder::auth::SessionChecker;
 use fightingtinder::db::connection_pool;
 use fightingtinder::paths::{swipe, users};
@@ -20,7 +19,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(CookieSession::signed(session_secret.as_bytes()).secure(false))
-            .data(pool)
+            .data(Arc::clone(&pool))
             .service(
                 scope("/user")
                     .route("", get().to(users::get_users))
@@ -30,16 +29,18 @@ async fn main() -> std::io::Result<()> {
                     .route("/logout", get().to(users::logout))
                     .service(
                         scope("/manage")
-                            .wrap(SessionChecker {})
+                            .wrap(SessionChecker::new(Arc::clone(&pool)))
                             .route("/li", get().to(users::check_login))
                             .route("/location", post().to(users::set_location)),
                     ),
             )
             .service(
                 scope("/swipe")
-                    .wrap(SessionChecker {})
+                    .wrap(SessionChecker::new(Arc::clone(&pool)))
                     .route("", post().to(swipe::do_swipe))
-                    .route("/available", get().to(swipe::available)),
+                    .route("/available", get().to(swipe::available))
+                    .route("/matches", get().to(swipe::matches))
+                    .route("/match/{username}", web::delete().to(swipe::delete_match)),
             )
     })
     .bind("127.0.0.1:8080")?

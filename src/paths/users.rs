@@ -178,7 +178,7 @@ pub async fn set_location(
     match session.get::<String>("username") {
         Ok(Some(username)) => {
             let ll = latlong.into_inner();
-            match conn_pool.as_ref().try_get() {
+            match conn_pool.try_get() {
                 Some(conn) => {
                     match diesel::update(
                         users::dsl::users.filter(users::dsl::username.eq(username)),
