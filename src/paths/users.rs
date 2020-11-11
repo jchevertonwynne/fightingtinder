@@ -9,13 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::db::DBUser;
 use crate::schema::users;
 
-lazy_static! {
-    pub static ref JWT_SECRET: String = {
-        dotenv::dotenv().ok();
-        dotenv::var("JWT_SECRET").expect("jwt secret should be set")
-    };
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UserDTO {
     username: String,

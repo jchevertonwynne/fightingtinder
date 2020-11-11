@@ -746,7 +746,6 @@ dependencies = [
  "diesel",
  "dotenv",
  "futures-util",
- "lazy_static",
  "postgres",
  "serde",
  "serde_json",
