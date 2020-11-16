@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use actix_session::Session;
 use actix_web::{web, HttpResponse, Responder};
@@ -16,49 +16,16 @@ pub struct UserDTO {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct UserJWT {
-    pub username: String,
-    pub exp: usize,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct LatLongDTO {
     lat: f64,
     long: f64,
 }
 
-impl From<&DBUser> for UserDTO {
-    fn from(db_user: &DBUser) -> Self {
-        Self {
-            username: db_user.username.clone(),
-            password: db_user.password.clone(),
-        }
-    }
-}
-
-impl From<&DBUser> for UserJWT {
-    fn from(user: &DBUser) -> Self {
-        Self {
-            username: user.username.clone(),
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
-        }
-    }
-}
-
-impl From<&UserDTO> for UserJWT {
-    fn from(user: &UserDTO) -> Self {
-        Self {
-            username: user.username.clone(),
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
-        }
-    }
-}
-
 pub async fn get_users(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
-    match conn_pool.get_ref().try_get() {
-        Some(conn) => match users::dsl::users.load::<DBUser>(&conn) {
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => match users::table.load::<DBUser>(&conn) {
             Ok(db_users) => {
                 let as_string =
                     serde_json::to_string(&db_users).expect("unable to jsonify user records");
@@ -66,7 +33,7 @@ pub async fn get_users(
             }
             Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
         },
-        None => HttpResponse::InternalServerError().body("could not get db conn instance"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -75,15 +42,15 @@ pub async fn get_user(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let username = info.into_inner();
-    match conn_pool.get_ref().try_get() {
-        Some(conn) => match users::dsl::users.find(username).first::<DBUser>(&conn) {
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => match users::table.find(username).first::<DBUser>(&conn) {
             Ok(dbu) => {
                 let as_string = serde_json::to_string(&dbu).expect("unable to jsonify UserDTO");
                 HttpResponse::Ok().body(as_string)
             }
             Err(err) => HttpResponse::NotFound().body(err.to_string()),
         },
-        None => HttpResponse::InternalServerError().body("could not get db conn instance"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -95,13 +62,14 @@ pub async fn create_user(
     let mut user = user.into_inner();
     user.password = bcrypt::hash(&user.password, 10).expect("unable to encrypt user password");
 
-    match conn_pool.get_ref().try_get() {
-        Some(conn) => {
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => {
             let user = DBUser {
                 username: user.username,
                 password: user.password,
                 lat: None,
                 long: None,
+                bio: None,
             };
             match diesel::insert_into(users::table)
                 .values(&user)
@@ -111,15 +79,14 @@ pub async fn create_user(
                     if let Err(err) = session.set("username", &user_record.username) {
                         println!("error setting username in session: {:?}", err);
                     }
-                    match serde_json::to_string(&UserJWT::from(&user_record)) {
-                        Ok(s) => HttpResponse::Ok().body(s),
-                        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
-                    }
+                    let as_string =
+                        serde_json::to_string(&user_record).expect("failed to jsonify DBUser");
+                    HttpResponse::Ok().body(as_string)
                 }
                 Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
             }
         }
-        None => HttpResponse::InternalServerError().body("could not get db conn instance"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -129,11 +96,8 @@ pub async fn login(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let user = user.into_inner();
-    match conn_pool.get_ref().try_get() {
-        Some(conn) => match users::dsl::users
-            .find(&user.username)
-            .first::<DBUser>(&conn)
-        {
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => match users::table.find(&user.username).first::<DBUser>(&conn) {
             Ok(db_user) => match bcrypt::verify(&user.password, &db_user.password) {
                 Ok(true) => {
                     if let Err(err) = session.set("username", db_user.username) {
@@ -147,7 +111,7 @@ pub async fn login(
             },
             Err(err) => HttpResponse::BadRequest().body(err.to_string()),
         },
-        None => HttpResponse::InternalServerError().body("could not get db conn instance"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -156,9 +120,24 @@ pub async fn logout(session: Session) -> impl Responder {
     HttpResponse::Ok().finish()
 }
 
-pub async fn check_login(session: Session) -> impl Responder {
+pub async fn check_login(
+    session: Session,
+    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+) -> impl Responder {
     match session.get::<String>("username") {
-        Ok(Some(username)) => HttpResponse::Ok().body(username),
+        Ok(Some(username)) => match conn_pool.get() {
+            Ok(conn) => match users::table
+                .filter(users::username.eq(&username))
+                .first::<DBUser>(&conn)
+            {
+                Ok(user) => {
+                    let as_string = serde_json::to_string(&user).expect("failed to jsonify DBUser");
+                    HttpResponse::Ok().body(as_string)
+                }
+                Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+            },
+            Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+        },
         _ => HttpResponse::BadRequest().body("missing username from session cookie"),
     }
 }
@@ -171,19 +150,17 @@ pub async fn set_location(
     match session.get::<String>("username") {
         Ok(Some(username)) => {
             let ll = latlong.into_inner();
-            match conn_pool.try_get() {
-                Some(conn) => {
-                    match diesel::update(
-                        users::dsl::users.filter(users::dsl::username.eq(username)),
-                    )
-                    .set((users::dsl::lat.eq(ll.lat), users::dsl::long.eq(ll.long)))
-                    .execute(&conn)
+            match conn_pool.get_timeout(Duration::from_millis(500)) {
+                Ok(conn) => {
+                    match diesel::update(users::table.filter(users::username.eq(username)))
+                        .set((users::lat.eq(ll.lat), users::long.eq(ll.long)))
+                        .execute(&conn)
                     {
                         Ok(_) => HttpResponse::Ok().finish(),
                         Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
                     }
                 }
-                None => HttpResponse::Ok().finish(),
+                Err(err) => HttpResponse::Ok().body(err.to_string()),
             }
         }
         _ => HttpResponse::BadRequest().body("missing user from session cookie"),

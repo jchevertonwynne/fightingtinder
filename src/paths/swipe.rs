@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use actix_web::{web, HttpResponse, Responder};
 use diesel::{
+    dsl::{exists, not},
     r2d2::{ConnectionManager, Pool},
     BoolExpressionMethods, ExpressionMethods, Insertable, PgConnection, QueryDsl, RunQueryDsl,
 };
@@ -31,26 +32,30 @@ pub async fn available(
         .expect("session should be active")
         .expect("username should be got by middleware");
 
-    match conn_pool.try_get() {
-        Some(conn) => {
-            let not_swiped_on = users::dsl::users.filter(
-                diesel::dsl::not(diesel::dsl::exists(
-                    swipes::dsl::swipes
-                        .filter(swipes::swiper.eq(&username))
-                        .filter(swipes::swiped.eq(users::username)),
-                ))
-                .and(users::username.ne(&username)),
-            );
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => {
+            let not_swiped_on = users::table
+                .filter(
+                    not(exists(
+                        swipes::table
+                            .filter(swipes::swiper.eq(&username))
+                            .filter(swipes::swiped.eq(users::username)),
+                    ))
+                    .and(users::username.ne(&username)),
+                )
+                .filter(not(users::lat.is_null()))
+                .filter(not(users::long.is_null()));
 
             match not_swiped_on.load::<DBUser>(&conn) {
-                Ok(users) => match serde_json::to_string(&users) {
-                    Ok(users_string) => HttpResponse::Ok().body(users_string),
-                    Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
-                },
+                Ok(users) => {
+                    let as_string =
+                        serde_json::to_string(&users).expect("failed to jsonify DBUsers");
+                    HttpResponse::Ok().body(as_string)
+                }
                 Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
             }
         }
-        None => HttpResponse::InternalServerError().body("couldnt get a db connection"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -63,8 +68,8 @@ pub async fn do_swipe(
         .get::<String>("username")
         .expect("session should be active")
         .expect("username should be got by middleware");
-    match conn_pool.try_get() {
-        Some(conn) => {
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => {
             let swipe = DBSwipe {
                 swiper: swiper.clone(),
                 swiped: swipe.swiped.clone(),
@@ -75,7 +80,7 @@ pub async fn do_swipe(
                 .get_result::<DBSwipe>(&conn)
             {
                 Ok(_) => {
-                    if let Ok(_) = swipes::dsl::swipes
+                    if let Ok(_) = swipes::table
                         .filter(swipes::swiper.eq(&swipe.swiped))
                         .filter(swipes::swiped.eq(&swiper))
                         .filter(swipes::status.eq(true))
@@ -106,7 +111,7 @@ pub async fn do_swipe(
                 Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
             }
         }
-        None => HttpResponse::InternalServerError().body("unable to connect to db"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -136,8 +141,8 @@ pub async fn matches(
         .expect("session should be active")
         .expect("username should be got by middleware");
 
-    match conn_pool.get_ref().try_get() {
-        Some(conn) => match matches::dsl::matches
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => match matches::table
             .filter(matches::username1.eq(&user))
             .or_filter(matches::username2.eq(&user))
             .load::<DBMatch>(&conn)
@@ -147,14 +152,12 @@ pub async fn matches(
                     .into_iter()
                     .map(|m| UserMatch::from_record(&user, m))
                     .collect();
-                match serde_json::to_string(&matches) {
-                    Ok(match_str) => HttpResponse::Ok().body(match_str),
-                    Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
-                }
+                let as_string = serde_json::to_string(&matches).expect("unable to jsonify DBUsers");
+                HttpResponse::Ok().body(as_string)
             }
             Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
         },
-        None => HttpResponse::InternalServerError().body("unable to connect to db"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }
 
@@ -168,9 +171,9 @@ pub async fn delete_match(
         .expect("session should be active")
         .expect("username should be got by middleware");
     let other = other.into_inner();
-    match conn_pool.try_get() {
-        Some(conn) => match diesel::delete(
-            matches::dsl::matches
+    match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => match diesel::delete(
+            matches::table
                 .filter(
                     matches::username1
                         .eq(&user)
@@ -187,6 +190,6 @@ pub async fn delete_match(
             Ok(_) => HttpResponse::Ok().finish(),
             Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
         },
-        None => HttpResponse::InternalServerError().body("unable to connect to db"),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
     }
 }

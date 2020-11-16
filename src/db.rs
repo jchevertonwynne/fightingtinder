@@ -12,6 +12,7 @@ pub struct DBUser {
     pub(crate) password: String,
     pub(crate) lat: Option<f64>,
     pub(crate) long: Option<f64>,
+    pub(crate) bio: Option<String>,
 }
 
 #[derive(Queryable, Insertable, Debug)]
@@ -34,10 +35,11 @@ impl Serialize for DBUser {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("DBUser", 3)?;
+        let mut state = serializer.serialize_struct("DBUser", 4)?;
         state.serialize_field("username", &self.username)?;
-        state.serialize_field("latitude", &self.lat)?;
-        state.serialize_field("longitude", &self.long)?;
+        state.serialize_field("lat", &self.lat)?;
+        state.serialize_field("long", &self.long)?;
+        state.serialize_field("bio", &self.bio)?;
         state.end()
     }
 }

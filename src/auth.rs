@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use actix_session::UserSession;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
@@ -65,8 +65,8 @@ where
             .get::<String>("username")
             .expect("method literally cannot fail")
         {
-            Some(username) => match self.conn_pool.try_get() {
-                Some(conn) => match users::dsl::users.find(username).first::<DBUser>(&conn) {
+            Some(username) => match self.conn_pool.get_timeout(Duration::from_millis(500)) {
+                Ok(conn) => match users::table.find(username).first::<DBUser>(&conn) {
                     Ok(_) => Either::Left(self.service.call(req)),
                     Err(err) => {
                         session.remove("username");
@@ -75,9 +75,9 @@ where
                         )))
                     }
                 },
-                None => Either::Right(ok(req.into_response(
+                Err(err) => Either::Right(ok(req.into_response(
                     HttpResponse::InternalServerError()
-                        .body("could not get db connection")
+                        .body(err.to_string())
                         .into_body(),
                 ))),
             },
