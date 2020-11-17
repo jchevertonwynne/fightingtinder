@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use actix_session::UserSession;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::{Error, HttpResponse};
+use actix_web::{Error, HttpMessage, HttpResponse};
 use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection, QueryDsl, RunQueryDsl,
@@ -61,31 +61,42 @@ where
 
     fn call(&mut self, req: ServiceRequest) -> Self::Future {
         let session = req.get_session();
-        match session
+        let username = match session
             .get::<String>("username")
             .expect("method literally cannot fail")
         {
-            Some(username) => match self.conn_pool.get_timeout(Duration::from_millis(500)) {
-                Ok(conn) => match users::table.find(username).first::<DBUser>(&conn) {
-                    Ok(_) => Either::Left(self.service.call(req)),
-                    Err(err) => {
-                        session.remove("username");
-                        Either::Right(ok(req.into_response(
-                            HttpResponse::BadRequest().body(err.to_string()).into_body(),
-                        )))
-                    }
-                },
-                Err(err) => Either::Right(ok(req.into_response(
+            Some(username) => username,
+            None => {
+                return Either::Right(ok(req.into_response(
+                    HttpResponse::BadRequest()
+                        .body("missing username from session cookie")
+                        .into_body(),
+                )))
+            }
+        };
+
+        let conn = match self.conn_pool.get_timeout(Duration::from_millis(500)) {
+            Ok(c) => c,
+            Err(err) => {
+                return Either::Right(ok(req.into_response(
                     HttpResponse::InternalServerError()
                         .body(err.to_string())
                         .into_body(),
-                ))),
-            },
-            None => Either::Right(ok(req.into_response(
-                HttpResponse::BadRequest()
-                    .body("missing username from session cookie")
-                    .into_body(),
-            ))),
+                )))
+            }
+        };
+
+        match users::table.find(username).first::<DBUser>(&conn) {
+            Ok(user) => {
+                req.extensions_mut().insert(user);
+                Either::Left(self.service.call(req))
+            }
+            Err(err) => {
+                session.remove("username");
+                Either::Right(ok(req.into_response(
+                    HttpResponse::BadRequest().body(err.to_string()).into_body(),
+                )))
+            }
         }
     }
 }
