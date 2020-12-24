@@ -1,0 +1,3 @@
+ALTER TABLE users
+ADD COLUMN bio VARCHAR,
+ADD COLUMN profile_pic VARCHAR;

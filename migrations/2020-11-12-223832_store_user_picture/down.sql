@@ -1,0 +1,3 @@
+ALTER TABLE users
+DROP COLUMN bio,
+DROP COLUMN profile_pic;

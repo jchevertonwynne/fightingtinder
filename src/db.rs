@@ -13,6 +13,7 @@ pub struct DBUser {
     pub(crate) lat: Option<f64>,
     pub(crate) long: Option<f64>,
     pub(crate) bio: Option<String>,
+    pub(crate) profile_pic: Option<String>,
 }
 
 #[derive(Queryable, Insertable, Debug)]

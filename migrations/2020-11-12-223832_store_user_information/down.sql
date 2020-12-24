@@ -1,3 +1,0 @@
-ALTER TABLE users
-DROP COLUMN bio;
-DROP TABLE images;

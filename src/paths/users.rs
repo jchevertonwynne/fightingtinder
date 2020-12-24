@@ -1,9 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{fs, io::Write, sync::Arc, time::Duration};
 
+use actix_multipart::Multipart;
 use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl};
+use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db::DBUser;
@@ -19,6 +21,11 @@ pub struct UserDTO {
 pub struct LatLongDTO {
     lat: f64,
     long: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BioDTO {
+    bio: String,
 }
 
 pub async fn get_users(
@@ -38,7 +45,7 @@ pub async fn get_users(
     HttpResponse::Ok().body(as_string)
 }
 
-pub async fn get_user(
+pub async fn get_user_pic(
     info: web::Path<String>,
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
@@ -49,13 +56,22 @@ pub async fn get_user(
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
 
-    match users::table.find(username).first::<DBUser>(&conn) {
-        Ok(dbu) => {
-            let as_string = serde_json::to_string(&dbu).expect("unable to jsonify UserDTO");
-            HttpResponse::Ok().body(as_string)
-        }
-        Err(err) => HttpResponse::NotFound().body(err.to_string()),
-    }
+    let dbu: DBUser = match users::table.find(username).first::<DBUser>(&conn) {
+        Ok(dbu) => dbu,
+        Err(err) => return HttpResponse::NotFound().body(err.to_string()),
+    };
+
+    let filename = match &dbu.profile_pic {
+        Some(s) => s.as_str(),
+        None => return HttpResponse::NotFound().finish(),
+    };
+
+    let contents = match fs::read(filename) {
+        Ok(c) => c,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    HttpResponse::Ok().body(contents)
 }
 
 pub async fn create_user(
@@ -77,6 +93,7 @@ pub async fn create_user(
         lat: None,
         long: None,
         bio: None,
+        profile_pic: None,
     };
     let user_record = match diesel::insert_into(users::table)
         .values(&user)
@@ -111,16 +128,18 @@ pub async fn login(
         Err(err) => return HttpResponse::BadRequest().body(err.to_string()),
     };
 
-    match bcrypt::verify(&user.password, &db_user.password) {
-        Ok(true) => {
-            if let Err(err) = session.set("username", db_user.username) {
-                eprintln!("err setting username in session: {:?}", err);
-            }
+    let found = match bcrypt::verify(&user.password, &db_user.password) {
+        Ok(found) => found,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
 
-            HttpResponse::Ok().finish()
+    if found {
+        if let Err(err) = session.set("username", db_user.username) {
+            eprintln!("err setting username in session: {:?}", err);
         }
-        Ok(false) => HttpResponse::BadRequest().body("password incorrect"),
-        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+        HttpResponse::Ok().finish()
+    } else {
+        HttpResponse::BadRequest().body("password incorrect")
     }
 }
 
@@ -135,7 +154,7 @@ pub async fn check_login(
 ) -> impl Responder {
     let ext = request.extensions();
     let username = match ext.get::<DBUser>() {
-        Some(u) => &u.username,
+        Some(u) => u.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
 
@@ -163,7 +182,7 @@ pub async fn set_location(
 ) -> impl Responder {
     let ext = request.extensions();
     let username = match ext.get::<DBUser>() {
-        Some(u) => &u.username,
+        Some(u) => u.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
 
@@ -176,6 +195,93 @@ pub async fn set_location(
 
     match diesel::update(users::table.filter(users::username.eq(username)))
         .set((users::lat.eq(ll.lat), users::long.eq(ll.long)))
+        .execute(&conn)
+    {
+        Ok(_) => HttpResponse::Ok().finish(),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+    }
+}
+
+pub async fn set_bio(
+    request: HttpRequest,
+    latlong: web::Json<BioDTO>,
+    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+) -> impl Responder {
+    let ext = request.extensions();
+    let username = match ext.get::<DBUser>() {
+        Some(user) => user.username.as_str(),
+        None => return HttpResponse::BadRequest().body("user not set on request"),
+    };
+
+    let bio = latlong.into_inner();
+
+    let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    match diesel::update(users::table.filter(users::username.eq(username)))
+        .set(users::bio.eq(bio.bio))
+        .execute(&conn)
+    {
+        Ok(_) => HttpResponse::Ok().finish(),
+        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+    }
+}
+
+pub async fn upload_profile_pic(
+    request: HttpRequest,
+    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+    mut payload: Multipart,
+) -> impl Responder {
+    let ext = request.extensions();
+    let username = match ext.get::<DBUser>() {
+        Some(user) => user.username.as_str(),
+        None => return HttpResponse::BadRequest().body("user not set on request"),
+    };
+
+    let mut field = match payload.try_next().await {
+        Ok(Some(field)) => field,
+        _ => return HttpResponse::BadRequest().body("missing file upload"),
+    };
+
+    let content_type = match field.content_disposition() {
+        Some(disposition) => disposition,
+        None => return HttpResponse::BadRequest().body("bad file upload lol"),
+    };
+
+    let raw_filename = match content_type.get_filename() {
+        Some(filename) => filename,
+        None => return HttpResponse::BadRequest().body("unable to determine filename"),
+    };
+
+    let file_type = match raw_filename.find('.').map(|i| &raw_filename[i + 1..]) {
+        Some(f_type) => f_type,
+        None => return HttpResponse::BadRequest().body("bad filename"),
+    };
+
+    let filename = format!("./tmp/{}.{}", username, file_type);
+    let filename_to_make = filename.clone();
+
+    let mut f = web::block(|| fs::File::create(filename_to_make))
+        .await
+        .unwrap();
+
+    while let Some(chunk) = field.next().await {
+        let data = chunk.unwrap();
+        // filesystem operations are blocking, we have to use threadpool
+        f = web::block(move || f.write_all(&data).map(|_| f))
+            .await
+            .expect("pls");
+    }
+
+    let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    match diesel::update(users::table.filter(users::username.eq(username)))
+        .set(users::profile_pic.eq(&filename))
         .execute(&conn)
     {
         Ok(_) => HttpResponse::Ok().finish(),

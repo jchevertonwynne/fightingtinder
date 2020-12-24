@@ -24,14 +24,16 @@ async fn main() -> std::io::Result<()> {
                 scope("/user")
                     .route("", get().to(users::get_users))
                     .route("", post().to(users::create_user))
-                    .route("/u/{username}", get().to(users::get_user))
+                    .route("/u/{username}", get().to(users::get_user_pic))
                     .route("/login", post().to(users::login))
                     .route("/logout", get().to(users::logout))
                     .service(
                         scope("/manage")
                             .wrap(SessionChecker::new(Arc::clone(&pool)))
                             .route("/li", get().to(users::check_login))
-                            .route("/location", post().to(users::set_location)),
+                            .route("/location", post().to(users::set_location))
+                            .route("/bio", post().to(users::set_bio))
+                            .route("/profile_pic", post().to(users::upload_profile_pic)),
                     ),
             )
             .service(
