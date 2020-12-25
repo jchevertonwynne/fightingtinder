@@ -52,7 +52,7 @@ pub async fn get_users(
 pub async fn get_user_pic(
     info: web::Path<String>,
     pg_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
-    redis_pool: web::Data<r2d2_redis::r2d2::Pool<RedisConnectionManager>>,
+    redis_pool: web::Data<Pool<RedisConnectionManager>>,
 ) -> impl Responder {
     let username = info.into_inner();
 
@@ -107,6 +107,84 @@ pub async fn get_user_pic(
     };
 
     HttpResponse::Ok().body(contents)
+}
+
+pub async fn upload_profile_pic(
+    request: HttpRequest,
+    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+    redis_pool: web::Data<Pool<RedisConnectionManager>>,
+    mut payload: Multipart,
+) -> impl Responder {
+    let ext = request.extensions();
+    let username = match ext.get::<DBUser>() {
+        Some(user) => user.username.as_str(),
+        None => return HttpResponse::BadRequest().body("user not set on request"),
+    };
+
+    let mut field = match payload.try_next().await {
+        Ok(Some(field)) => field,
+        _ => return HttpResponse::BadRequest().body("missing file upload"),
+    };
+
+    let content_type = match field.content_disposition() {
+        Some(disposition) => disposition,
+        None => return HttpResponse::BadRequest().body("bad file upload lol"),
+    };
+
+    let raw_filename = match content_type.get_filename() {
+        Some(filename) => filename,
+        None => return HttpResponse::BadRequest().body("unable to determine filename"),
+    };
+
+    let file_type = match raw_filename.find('.').map(|i| &raw_filename[i + 1..]) {
+        Some(f_type) => f_type,
+        None => return HttpResponse::BadRequest().body("bad filename"),
+    };
+
+    let filename = format!("./profile_pics/{}.{}", username, file_type);
+    let filename_to_make = filename.clone();
+
+    let mut f = web::block(|| fs::File::create(filename_to_make))
+        .await
+        .unwrap();
+
+    while let Some(chunk) = field.next().await {
+        let data = chunk.unwrap();
+        f = web::block(move || f.write_all(&data).map(|_| f))
+            .await
+            .expect("pls");
+    }
+
+    let pg_conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    let mut redis_conn = match redis_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    };
+
+    if let Err(err) = diesel::update(users::table.filter(users::username.eq(username)))
+        .set(users::profile_pic.eq(&filename))
+        .execute(&pg_conn)
+    {
+        return HttpResponse::InternalServerError().body(err.to_string());
+    }
+
+    if let Err(err) = r2d2_redis::redis::Cmd::new()
+        .arg("DEL")
+        .arg(username)
+        .query::<()>(redis_conn.deref_mut())
+    {
+        eprintln!(
+            "failed to update redis cache for user {}: {}",
+            username,
+            err.to_string()
+        );
+    }
+
+    HttpResponse::Ok().finish()
 }
 
 pub async fn create_user(
@@ -257,65 +335,6 @@ pub async fn set_bio(
 
     match diesel::update(users::table.filter(users::username.eq(username)))
         .set(users::bio.eq(bio.bio))
-        .execute(&conn)
-    {
-        Ok(_) => HttpResponse::Ok().finish(),
-        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
-    }
-}
-
-pub async fn upload_profile_pic(
-    request: HttpRequest,
-    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
-    mut payload: Multipart,
-) -> impl Responder {
-    let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
-        Some(user) => user.username.as_str(),
-        None => return HttpResponse::BadRequest().body("user not set on request"),
-    };
-
-    let mut field = match payload.try_next().await {
-        Ok(Some(field)) => field,
-        _ => return HttpResponse::BadRequest().body("missing file upload"),
-    };
-
-    let content_type = match field.content_disposition() {
-        Some(disposition) => disposition,
-        None => return HttpResponse::BadRequest().body("bad file upload lol"),
-    };
-
-    let raw_filename = match content_type.get_filename() {
-        Some(filename) => filename,
-        None => return HttpResponse::BadRequest().body("unable to determine filename"),
-    };
-
-    let file_type = match raw_filename.find('.').map(|i| &raw_filename[i + 1..]) {
-        Some(f_type) => f_type,
-        None => return HttpResponse::BadRequest().body("bad filename"),
-    };
-
-    let filename = format!("./tmp/{}.{}", username, file_type);
-    let filename_to_make = filename.clone();
-
-    let mut f = web::block(|| fs::File::create(filename_to_make))
-        .await
-        .unwrap();
-
-    while let Some(chunk) = field.next().await {
-        let data = chunk.unwrap();
-        f = web::block(move || f.write_all(&data).map(|_| f))
-            .await
-            .expect("pls");
-    }
-
-    let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
-    };
-
-    match diesel::update(users::table.filter(users::username.eq(username)))
-        .set(users::profile_pic.eq(&filename))
         .execute(&conn)
     {
         Ok(_) => HttpResponse::Ok().finish(),

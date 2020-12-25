@@ -8,6 +8,6 @@ Copy `.env.fake` to `.env` and create your own secret values. Do not use the def
 
 `docker run -d -p 6378:6379 --name fightingtinder-redis redis`
 
-`docker run -d -p 6000:5432 --name fightingtinder-pg -e POSTGRES_PASSWORD=yourPassword postgres`
+`docker run -d -p 6000:5432 --name fightingtinder-postgres -e POSTGRES_PASSWORD=yourPassword postgres`
 
 `cargo run` to start application in debug mode, `cargo run --release` for full speed version. To build a binary, use `cargo build --release` and run using `./target/release/fightingtinder`

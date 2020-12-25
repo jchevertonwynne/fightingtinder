@@ -1,5 +1,6 @@
 /.idea
 /target
+.vscode
 .env
 fightingtinder.iml
-/tmp
+/profile_pics
