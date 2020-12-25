@@ -1,3 +1,5 @@
+extern crate r2d2_redis;
+
 use std::{fs, io::Write, sync::Arc, time::Duration};
 
 use actix_multipart::Multipart;
@@ -10,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::DBUser;
 use crate::schema::users;
+use r2d2_redis::RedisConnectionManager;
+use std::ops::DerefMut;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UserDTO {
@@ -47,11 +51,12 @@ pub async fn get_users(
 
 pub async fn get_user_pic(
     info: web::Path<String>,
-    conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+    pg_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
+    redis_pool: web::Data<r2d2_redis::r2d2::Pool<RedisConnectionManager>>,
 ) -> impl Responder {
     let username = info.into_inner();
 
-    let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
+    let conn = match pg_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
@@ -61,14 +66,44 @@ pub async fn get_user_pic(
         Err(err) => return HttpResponse::NotFound().body(err.to_string()),
     };
 
-    let filename = match &dbu.profile_pic {
-        Some(s) => s.as_str(),
-        None => return HttpResponse::NotFound().finish(),
+    let mut rd_conn = match redis_pool.get_timeout(Duration::from_millis(500)) {
+        Ok(rd_conn) => rd_conn,
+        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
 
-    let contents = match fs::read(filename) {
-        Ok(c) => c,
-        Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+    let contents = match r2d2_redis::redis::cmd("GET")
+        .arg(dbu.username.as_str())
+        .query::<Option<Vec<u8>>>(rd_conn.deref_mut())
+    {
+        Ok(opt) => match opt {
+            Some(val) => val,
+            None => {
+                let filename = match &dbu.profile_pic {
+                    Some(s) => s.as_str(),
+                    None => return HttpResponse::NotFound().finish(),
+                };
+
+                let contents = match fs::read(filename) {
+                    Ok(contents) => contents,
+                    Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
+                };
+
+                if let Err(err) = r2d2_redis::redis::Cmd::new()
+                    .arg("SET")
+                    .arg(dbu.username.as_str())
+                    .arg(contents.clone())
+                    .query::<()>(rd_conn.deref_mut())
+                {
+                    eprintln!("error storing user pic to redis: {}", err.to_string());
+                }
+
+                contents
+            }
+        },
+        Err(err) => {
+            eprintln!("redis error: {}", err.to_string());
+            return HttpResponse::InternalServerError().body(err.to_string());
+        }
     };
 
     HttpResponse::Ok().body(contents)
@@ -269,7 +304,6 @@ pub async fn upload_profile_pic(
 
     while let Some(chunk) = field.next().await {
         let data = chunk.unwrap();
-        // filesystem operations are blocking, we have to use threadpool
         f = web::block(move || f.write_all(&data).map(|_| f))
             .await
             .expect("pls");

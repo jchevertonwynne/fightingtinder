@@ -13,8 +13,6 @@ use crate::schema::matches;
 use crate::schema::swipes;
 use crate::schema::users;
 
-use serde_json;
-
 #[derive(Insertable, Serialize, Deserialize, Debug)]
 #[table_name = "swipes"]
 pub struct SwipeDTO {
@@ -85,14 +83,15 @@ pub async fn do_swipe(
         .get_result::<DBSwipe>(&conn)
     {
         Ok(_) => {
-            if let Ok(_) = swipes::table
+            if swipes::table
                 .filter(swipes::swiper.eq(&swipe.swiped))
                 .filter(swipes::swiped.eq(swiper.clone()))
                 .filter(swipes::status.eq(true))
                 .first::<DBSwipe>(&conn)
+                .is_ok()
             {
                 let mut username1 = swiper.clone();
-                let mut username2 = swipe.swiped.clone();
+                let mut username2 = swipe.swiped;
                 if username1 >= username2 {
                     std::mem::swap(&mut username1, &mut username2);
                 }

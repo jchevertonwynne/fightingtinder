@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use actix_session::CookieSession;
 use actix_web::{web, App, HttpServer};
+
 use web::{get, post, scope};
 
 use fightingtinder::auth::SessionChecker;
@@ -14,12 +15,19 @@ async fn main() -> std::io::Result<()> {
     let session_secret = dotenv::var("SESSION_SECRET").expect("SESSION_SECRET should be set");
 
     HttpServer::new(move || {
-        let pool = connection_pool().expect("unable to create pool of connections");
-        let pool = Arc::new(pool);
+        let pg_pool = connection_pool().expect("unable to create pool of connections");
+        let pg_pool = Arc::new(pg_pool);
+
+        let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://localhost").unwrap();
+        let rd_pool = r2d2_redis::r2d2::Pool::builder()
+            .max_size(200)
+            .build(rd_pool)
+            .unwrap();
 
         App::new()
             .wrap(CookieSession::signed(session_secret.as_bytes()).secure(false))
-            .data(Arc::clone(&pool))
+            .data(Arc::clone(&pg_pool))
+            .data(rd_pool)
             .service(
                 scope("/user")
                     .route("", get().to(users::get_users))
@@ -29,7 +37,7 @@ async fn main() -> std::io::Result<()> {
                     .route("/logout", get().to(users::logout))
                     .service(
                         scope("/manage")
-                            .wrap(SessionChecker::new(Arc::clone(&pool)))
+                            .wrap(SessionChecker::new(Arc::clone(&pg_pool)))
                             .route("/li", get().to(users::check_login))
                             .route("/location", post().to(users::set_location))
                             .route("/bio", post().to(users::set_bio))
@@ -38,7 +46,7 @@ async fn main() -> std::io::Result<()> {
             )
             .service(
                 scope("/swipe")
-                    .wrap(SessionChecker::new(Arc::clone(&pool)))
+                    .wrap(SessionChecker::new(Arc::clone(&pg_pool)))
                     .route("", post().to(swipe::do_swipe))
                     .route("/available", get().to(swipe::available))
                     .route("/matches", get().to(swipe::matches))
