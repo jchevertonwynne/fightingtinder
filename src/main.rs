@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use actix_session::CookieSession;
 use actix_web::{web, App, HttpServer};
+use diesel::r2d2::{ConnectionManager, Pool};
 
 use web::{get, post, scope};
 
+use diesel::PgConnection;
 use fightingtinder::auth::SessionChecker;
-use fightingtinder::db::connection_pool;
-use fightingtinder::paths::{swipe, users};
+use fightingtinder::paths::{matches, swipe, users};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -15,8 +16,14 @@ async fn main() -> std::io::Result<()> {
     let session_secret = dotenv::var("SESSION_SECRET").expect("SESSION_SECRET should be set");
 
     HttpServer::new(move || {
-        let pg_pool = connection_pool().expect("unable to create pool of connections");
-        let pg_pool = Arc::new(pg_pool);
+        let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL env var should be set");
+        let manager = ConnectionManager::<PgConnection>::new(&database_url);
+        let pg_pool = Arc::new(
+            Pool::builder()
+                .max_size(5)
+                .build(manager)
+                .expect("unable to create pool of connections"),
+        );
 
         let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://localhost").unwrap();
         let rd_pool = r2d2_redis::r2d2::Pool::builder()
@@ -48,9 +55,13 @@ async fn main() -> std::io::Result<()> {
                 scope("/swipe")
                     .wrap(SessionChecker::new(Arc::clone(&pg_pool)))
                     .route("", post().to(swipe::do_swipe))
-                    .route("/available", get().to(swipe::available))
-                    .route("/matches", get().to(swipe::matches))
-                    .route("/match/{username}", web::delete().to(swipe::delete_match)),
+                    .route("/available", get().to(swipe::available)),
+            )
+            .service(
+                scope("/match")
+                    .wrap(SessionChecker::new(Arc::clone(&pg_pool)))
+                    .route("/", get().to(matches::matches))
+                    .route("/{username}", web::delete().to(matches::delete_match)),
             )
     })
     .bind("127.0.0.1:8080")?

@@ -1,5 +1,3 @@
-extern crate r2d2_redis;
-
 use std::{fs, io::Write, sync::Arc, time::Duration};
 
 use actix_multipart::Multipart;

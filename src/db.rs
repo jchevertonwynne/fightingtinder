@@ -1,5 +1,4 @@
-use diesel::r2d2::Pool;
-use diesel::{pg::PgConnection, r2d2::ConnectionManager, Queryable};
+use diesel::Queryable;
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 
@@ -43,14 +42,4 @@ impl Serialize for DBUser {
         state.serialize_field("bio", &self.bio)?;
         state.end()
     }
-}
-
-pub fn connection_pool() -> Result<Pool<ConnectionManager<PgConnection>>, String> {
-    dotenv::dotenv().ok();
-    let database_url = dotenv::var("DATABASE_URL").map_err(|e| e.to_string())?;
-    let manager = ConnectionManager::<PgConnection>::new(&database_url);
-    Pool::builder()
-        .max_size(3)
-        .build(manager)
-        .map_err(|err| err.to_string())
 }

@@ -7,10 +7,11 @@ use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection, QueryDsl, RunQueryDsl,
 };
-use futures_util::future::{ok, Either, Ready};
+use futures_util::future::{Either, Ready};
 use futures_util::task::{Context, Poll};
 
 use crate::{db::DBUser, schema::users};
+use futures_util::future;
 
 pub struct SessionChecker {
     conn_pool: Arc<Pool<ConnectionManager<PgConnection>>>,
@@ -67,7 +68,7 @@ where
         {
             Some(username) => username,
             None => {
-                return Either::Right(ok(req.into_response(
+                return Either::Right(future::ok(req.into_response(
                     HttpResponse::BadRequest()
                         .body("missing username from session cookie")
                         .into_body(),
@@ -78,7 +79,7 @@ where
         let conn = match self.conn_pool.get_timeout(Duration::from_millis(500)) {
             Ok(c) => c,
             Err(err) => {
-                return Either::Right(ok(req.into_response(
+                return Either::Right(future::ok(req.into_response(
                     HttpResponse::InternalServerError()
                         .body(err.to_string())
                         .into_body(),
@@ -93,7 +94,7 @@ where
             }
             Err(err) => {
                 session.remove("username");
-                Either::Right(ok(req.into_response(
+                Either::Right(future::ok(req.into_response(
                     HttpResponse::BadRequest().body(err.to_string()).into_body(),
                 )))
             }
