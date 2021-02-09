@@ -50,7 +50,7 @@ pub async fn get_users(
 pub async fn get_user_pic(
     info: web::Path<String>,
     pg_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
-    redis_pool: web::Data<Pool<RedisConnectionManager>>,
+    redis_pool: web::Data<Arc<Pool<RedisConnectionManager>>>,
 ) -> impl Responder {
     let username = info.into_inner();
 
@@ -110,7 +110,7 @@ pub async fn get_user_pic(
 pub async fn upload_profile_pic(
     request: HttpRequest,
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
-    redis_pool: web::Data<Pool<RedisConnectionManager>>,
+    redis_pool: web::Data<Arc<Pool<RedisConnectionManager>>>,
     mut payload: Multipart,
 ) -> impl Responder {
     let ext = request.extensions();

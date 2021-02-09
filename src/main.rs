@@ -14,27 +14,30 @@ use fightingtinder::paths::{matches, swipe, users};
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
     let session_secret = dotenv::var("SESSION_SECRET").expect("SESSION_SECRET should be set");
+    let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL env var should be set");
+    let manager = ConnectionManager::<PgConnection>::new(&database_url);
+    let pg_pool = Arc::new(
+        Pool::builder()
+            .max_size(200)
+            .build(manager)
+            .expect("unable to create pool of pg connections"),
+    );
+
+    println!("created pg pool");
+
+    let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://127.0.0.1").expect("unable to create connection manager");
+    let rd_pool = Arc::new(r2d2_redis::r2d2::Pool::builder()
+        .max_size(200)
+        .build(rd_pool)
+        .expect("unable to create redis pool"));
+
+    println!("created rd pool");
 
     HttpServer::new(move || {
-        let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL env var should be set");
-        let manager = ConnectionManager::<PgConnection>::new(&database_url);
-        let pg_pool = Arc::new(
-            Pool::builder()
-                .max_size(5)
-                .build(manager)
-                .expect("unable to create pool of connections"),
-        );
-
-        let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://localhost").unwrap();
-        let rd_pool = r2d2_redis::r2d2::Pool::builder()
-            .max_size(200)
-            .build(rd_pool)
-            .unwrap();
-
         App::new()
             .wrap(CookieSession::signed(session_secret.as_bytes()).secure(false))
             .data(Arc::clone(&pg_pool))
-            .data(rd_pool)
+            .data(Arc::clone(&rd_pool))
             .service(
                 scope("/user")
                     .route("", get().to(users::get_users))

@@ -35,7 +35,7 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(SessionCheckerMiddleware {
+        future::ok(SessionCheckerMiddleware {
             service,
             conn_pool: Arc::clone(&self.conn_pool),
         })
