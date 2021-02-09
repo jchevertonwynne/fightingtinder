@@ -25,17 +25,17 @@ pub async fn available(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(u) => &u.username,
-        None => panic!("route must always be accessed through auth")
+        None => panic!("route must always be accessed through auth"),
     };
 
     let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
         Err(err) => {
             eprintln!("failed to get pg conn for available handler");
-            return HttpResponse::InternalServerError().body(err.to_string())
-        },
+            return HttpResponse::InternalServerError().body(err.to_string());
+        }
     };
 
     let not_swiped_on = users::table
@@ -75,8 +75,8 @@ pub async fn do_swipe(
         Ok(conn) => conn,
         Err(err) => {
             eprintln!("failed to get pg conn for do_swipe handler");
-            return HttpResponse::InternalServerError().body(err.to_string())
-        },
+            return HttpResponse::InternalServerError().body(err.to_string());
+        }
     };
 
     let swipe = DBSwipe {

@@ -25,11 +25,14 @@ async fn main() -> std::io::Result<()> {
 
     println!("created pg pool");
 
-    let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://127.0.0.1").expect("unable to create connection manager");
-    let rd_pool = Arc::new(r2d2_redis::r2d2::Pool::builder()
-        .max_size(200)
-        .build(rd_pool)
-        .expect("unable to create redis pool"));
+    let rd_pool = r2d2_redis::RedisConnectionManager::new("redis://127.0.0.1")
+        .expect("unable to create connection manager");
+    let rd_pool = Arc::new(
+        r2d2_redis::r2d2::Pool::builder()
+            .max_size(200)
+            .build(rd_pool)
+            .expect("unable to create redis pool"),
+    );
 
     println!("created rd pool");
 
@@ -63,7 +66,7 @@ async fn main() -> std::io::Result<()> {
             .service(
                 scope("/match")
                     .wrap(SessionChecker::new(Arc::clone(&pg_pool)))
-                    .route("/", get().to(matches::matches))
+                    .route("", get().to(matches::matches))
                     .route("/{username}", web::delete().to(matches::delete_match)),
             )
     })

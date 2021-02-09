@@ -2,9 +2,9 @@ use crate::db::{DBMatch, DBUser};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{BoolExpressionMethods, ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
-use serde::Serialize;
 
 use crate::schema::matches;
 
@@ -30,7 +30,7 @@ pub async fn matches(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(u) => &u.username,
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
@@ -63,7 +63,7 @@ pub async fn delete_match(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(u) => &u.username,
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };

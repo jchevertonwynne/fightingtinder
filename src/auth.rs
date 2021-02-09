@@ -68,22 +68,26 @@ where
         {
             Some(username) => username,
             None => {
-                return Either::Right(future::ok(req.into_response(
-                    HttpResponse::BadRequest()
-                        .body("missing username from session cookie")
-                        .into_body(),
-                )))
+                return Either::Right(future::ok(
+                    req.into_response(
+                        HttpResponse::BadRequest()
+                            .body("missing username from session cookie")
+                            .into_body(),
+                    ),
+                ))
             }
         };
 
         let conn = match self.conn_pool.get_timeout(Duration::from_millis(500)) {
             Ok(c) => c,
             Err(err) => {
-                return Either::Right(future::ok(req.into_response(
-                    HttpResponse::InternalServerError()
-                        .body(err.to_string())
-                        .into_body(),
-                )))
+                return Either::Right(future::ok(
+                    req.into_response(
+                        HttpResponse::InternalServerError()
+                            .body(err.to_string())
+                            .into_body(),
+                    ),
+                ))
             }
         };
 

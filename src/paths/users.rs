@@ -48,18 +48,16 @@ pub async fn get_users(
 }
 
 pub async fn get_user_pic(
-    info: web::Path<String>,
+    username: web::Path<String>,
     pg_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
     redis_pool: web::Data<Arc<Pool<RedisConnectionManager>>>,
 ) -> impl Responder {
-    let username = info.into_inner();
-
     let conn = match pg_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
 
-    let dbu: DBUser = match users::table.find(username).first::<DBUser>(&conn) {
+    let dbu: DBUser = match users::table.find(username.into_inner()).first::<DBUser>(&conn) {
         Ok(dbu) => dbu,
         Err(err) => return HttpResponse::NotFound().body(err.to_string()),
     };
@@ -114,7 +112,7 @@ pub async fn upload_profile_pic(
     mut payload: Multipart,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(user) => user.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
@@ -124,22 +122,7 @@ pub async fn upload_profile_pic(
         _ => return HttpResponse::BadRequest().body("missing file upload"),
     };
 
-    let content_type = match field.content_disposition() {
-        Some(disposition) => disposition,
-        None => return HttpResponse::BadRequest().body("bad file upload lol"),
-    };
-
-    let raw_filename = match content_type.get_filename() {
-        Some(filename) => filename,
-        None => return HttpResponse::BadRequest().body("unable to determine filename"),
-    };
-
-    let file_type = match raw_filename.find('.').map(|i| &raw_filename[i + 1..]) {
-        Some(f_type) => f_type,
-        None => return HttpResponse::BadRequest().body("bad filename"),
-    };
-
-    let filename = format!("./profile_pics/{}.{}", username, file_type);
+    let filename = format!("./profile_pics/{}", username);
     let filename_to_make = filename.clone();
 
     let mut f = web::block(|| fs::File::create(filename_to_make))
@@ -227,12 +210,12 @@ pub async fn login(
     user: web::Json<UserDTO>,
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
-    let user = user.into_inner();
-
     let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
+
+    let user = user.into_inner();
 
     let db_user = match users::table.find(&user.username).first::<DBUser>(&conn) {
         Ok(db_user) => db_user,
@@ -264,7 +247,7 @@ pub async fn check_login(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(u) => u.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
@@ -292,18 +275,17 @@ pub async fn set_location(
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(u) => u.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
-
-    let ll = latlong.into_inner();
 
     let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::InternalServerError().body(err.to_string()),
     };
 
+    let ll = latlong.into_inner();
     match diesel::update(users::table.filter(users::username.eq(username)))
         .set((users::lat.eq(ll.lat), users::long.eq(ll.long)))
         .execute(&conn)
@@ -315,16 +297,14 @@ pub async fn set_location(
 
 pub async fn set_bio(
     request: HttpRequest,
-    latlong: web::Json<BioDTO>,
+    bio: web::Json<BioDTO>,
     conn_pool: web::Data<Arc<Pool<ConnectionManager<PgConnection>>>>,
 ) -> impl Responder {
     let ext = request.extensions();
-    let username = match ext.get::<DBUser>() {
+    let username: &str = match ext.get::<DBUser>() {
         Some(user) => user.username.as_str(),
         None => return HttpResponse::BadRequest().body("user not set on request"),
     };
-
-    let bio = latlong.into_inner();
 
     let conn = match conn_pool.get_timeout(Duration::from_millis(500)) {
         Ok(conn) => conn,
@@ -332,7 +312,7 @@ pub async fn set_bio(
     };
 
     match diesel::update(users::table.filter(users::username.eq(username)))
-        .set(users::bio.eq(bio.bio))
+        .set(users::bio.eq(bio.into_inner().bio))
         .execute(&conn)
     {
         Ok(_) => HttpResponse::Ok().finish(),
